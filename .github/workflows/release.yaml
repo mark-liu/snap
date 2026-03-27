@@ -1,0 +1,175 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            name: snap_linux_amd64
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            name: snap_linux_arm64
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            name: snap_darwin_amd64
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            name: snap_darwin_arm64
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Install cross-compilation tools
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
+
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Package
+        run: |
+          cd target/${{ matrix.target }}/release
+          tar czf /tmp/${{ matrix.name }}.tar.gz snap
+          shasum -a 256 /tmp/${{ matrix.name }}.tar.gz > /tmp/${{ matrix.name }}.tar.gz.sha256
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: /tmp/${{ matrix.name }}.tar.gz*
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create checksums
+        run: |
+          cd artifacts
+          find . -name "*.tar.gz" -exec cp {} . \;
+          sha256sum *.tar.gz > checksums.txt
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/*.tar.gz
+            artifacts/checksums.txt
+          generate_release_notes: true
+
+  homebrew:
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download darwin arm64 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: snap_darwin_arm64
+          path: artifacts
+
+      - name: Download darwin amd64 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: snap_darwin_amd64
+          path: artifacts
+
+      - name: Download linux amd64 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: snap_linux_amd64
+          path: artifacts
+
+      - name: Download linux arm64 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: snap_linux_arm64
+          path: artifacts
+
+      - name: Update Homebrew formula
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          VERSION=${GITHUB_REF_NAME#v}
+          BASE_URL="https://github.com/mark-liu/snap/releases/download/${GITHUB_REF_NAME}"
+
+          ARM64_SHA=$(sha256sum artifacts/snap_darwin_arm64.tar.gz | cut -d' ' -f1)
+          AMD64_SHA=$(sha256sum artifacts/snap_darwin_amd64.tar.gz | cut -d' ' -f1)
+          LINUX_AMD64_SHA=$(sha256sum artifacts/snap_linux_amd64.tar.gz | cut -d' ' -f1)
+          LINUX_ARM64_SHA=$(sha256sum artifacts/snap_linux_arm64.tar.gz | cut -d' ' -f1)
+
+          cat > /tmp/snap.rb << FORMULA
+          class Snap < Formula
+            desc "MCP stdio proxy that compresses Playwright accessibility snapshots"
+            homepage "https://github.com/mark-liu/snap"
+            license "MIT"
+            version "${VERSION}"
+
+            on_macos do
+              if Hardware::CPU.arm?
+                url "${BASE_URL}/snap_darwin_arm64.tar.gz"
+                sha256 "${ARM64_SHA}"
+              else
+                url "${BASE_URL}/snap_darwin_amd64.tar.gz"
+                sha256 "${AMD64_SHA}"
+              end
+            end
+
+            on_linux do
+              if Hardware::CPU.arm?
+                url "${BASE_URL}/snap_linux_arm64.tar.gz"
+                sha256 "${LINUX_ARM64_SHA}"
+              else
+                url "${BASE_URL}/snap_linux_amd64.tar.gz"
+                sha256 "${LINUX_AMD64_SHA}"
+              end
+            end
+
+            def install
+              bin.install "snap"
+            end
+
+            test do
+              assert_match "snap", shell_output("#{bin}/snap --version 2>&1")
+            end
+          end
+          FORMULA
+
+          cd /tmp
+          git clone https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/mark-liu/homebrew-tap.git
+          cp snap.rb homebrew-tap/Formula/snap.rb
+          cd homebrew-tap
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/snap.rb
+          git commit -m "snap ${VERSION}" || true
+          git push
