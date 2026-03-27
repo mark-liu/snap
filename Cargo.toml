@@ -1,0 +1,15 @@
+[package]
+name = "snap"
+version = "0.1.0"
+edition = "2024"
+description = "MCP stdio proxy that compresses Playwright accessibility snapshots"
+license = "MIT"
+repository = "https://github.com/mark-liu/snap"
+
+[dependencies]
+serde_json = "1"
+
+[profile.release]
+opt-level = 3
+lto = true
+strip = true
