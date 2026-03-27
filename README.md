@@ -1,65 +1,51 @@
 # snap
 
-MCP stdio proxy that compresses Playwright accessibility snapshots before they enter the LLM context window.
+MCP stdio proxy that compresses Playwright accessibility snapshots before they hit the LLM context window.
 
-## Problem
+## why
 
-Every Playwright MCP tool call (`browser_click`, `browser_navigate`, `browser_snapshot`, etc.) returns the full page accessibility tree as YAML — typically 50-80KB per call. This fills the LLM context window fast, especially on content-heavy sites.
+Every Playwright MCP tool call returns the full page accessibility tree as YAML — 50-80KB per call. Navigation chrome, engagement buttons, cursor annotations, bare images. The LLM doesn't need any of it. On a typical browsing session that's 18MB/week of noise.
 
-## Solution
+snap sits between Claude Code and the Playwright MCP server, strips the noise, keeps the content. ~1ms overhead.
 
-`snap` wraps the Playwright MCP server as a transparent stdio proxy. It intercepts JSON-RPC responses, finds YAML snapshot blocks, and strips structural noise while preserving all content the LLM needs for reasoning and interaction.
+## numbers
 
-**What it strips:**
-- Navigation sidebars (Home, Explore, Notifications, etc.)
-- Banner/header regions
-- Account menus
-- Engagement button groups (Reply, Repost, Like, Bookmark, Share)
-- Grok/Subscribe/Share buttons
-- Reply compose areas
+```
+X.com tweet page:  67KB → 41KB  (40% reduction)
+X.com article:     65KB → 60KB  (8% — mostly content, correct)
+latency:           ~1ms per call
+binary:            454KB
+deps:              serde_json only
+```
+
+## what gets stripped
+
+- nav sidebars, banners, account menus (full subtree removal)
+- engagement buttons (Reply/Repost/Like/Bookmark/Share groups)
+- Grok, Subscribe, Share, More buttons
+- reply compose areas
 - `[cursor=pointer]`, `[active]` annotations
-- Bare `img` elements with no alt text
-- Internal relative URL lines (`/url: /path`)
-- Console error/warning log lines
-- `[unchanged]` markers from incremental mode
+- bare `img` with no alt text
+- internal `/url: /path` nav links
+- console errors/warnings, `[unchanged]` markers
 
-**What it preserves:**
-- All text content
-- Element refs (needed for clicking)
-- Links with text labels
-- Images with alt text
-- `main` content regions
-- Form elements
+all text content, element refs, labeled links, images with alt text, main regions, and form elements are preserved.
 
-## Performance
-
-| Metric | Value |
-|--------|-------|
-| Latency overhead | ~1ms per tool call |
-| Tweet page (X.com) | 67KB → 41KB (40% reduction) |
-| Article page (X.com focus) | 65KB → 60KB (8% reduction) |
-| Binary size | 454KB |
-| Dependencies | `serde_json` only |
-
-## Installation
+## install
 
 ```bash
 cargo install --path .
-# or
-cargo build --release && cp target/release/snap ~/.cargo/bin/
 ```
 
-## Usage
+## usage
 
-Wrap your Playwright MCP server command:
+wrap your Playwright MCP server:
 
 ```bash
 snap npx -y @playwright/mcp@latest --cdp-endpoint http://localhost:9222
 ```
 
-### Claude Code config
-
-In `~/.claude.json`, change your Playwright MCP entry:
+### claude code
 
 ```json
 {
@@ -72,29 +58,19 @@ In `~/.claude.json`, change your Playwright MCP entry:
 }
 ```
 
-## How it works
-
-1. Spawns the wrapped MCP server as a child process
-2. Pipes stdin through unchanged (Claude Code → MCP server)
-3. Intercepts stdout (MCP server → Claude Code):
-   - Parses each line as JSON-RPC
-   - For tool results containing ` ```yaml` blocks, applies compression
-   - Forwards compressed result
-4. Pipes stderr through unchanged
-5. On exit, prints compression stats to stderr
-
-## Architecture
+## how it works
 
 ```
 Claude Code ←stdio→ snap ←stdio→ @playwright/mcp
                       │
-              JSON-RPC interception
-              YAML snapshot compression
-              ~1ms overhead per call
+              parses JSON-RPC on stdout
+              finds ```yaml snapshot blocks
+              strips structural noise
+              forwards compressed result
 ```
 
-Zero-copy passthrough for non-YAML messages. No network layer, no SQLite, no caching — just fast string processing on the stdio pipe.
+stdin and stderr pass through unchanged. non-YAML messages pass through unchanged. on exit, prints compression stats to stderr.
 
-## License
+## license
 
 MIT
