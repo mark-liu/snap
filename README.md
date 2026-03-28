@@ -33,6 +33,14 @@ all text content, element refs, labeled links, images with alt text, main region
 
 ## install
 
+### homebrew
+
+```bash
+brew install mark-liu/tap/snap
+```
+
+### cargo
+
 ```bash
 cargo install --path .
 ```
@@ -46,6 +54,12 @@ snap npx -y @playwright/mcp@latest --cdp-endpoint http://localhost:9222
 ```
 
 ### claude code
+
+```bash
+claude mcp add playwright -s user -- snap npx -y @playwright/mcp@latest
+```
+
+Or add to `~/.claude.json` manually:
 
 ```json
 {
