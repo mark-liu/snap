@@ -71,6 +71,11 @@ Claude Code ←stdio→ snap ←stdio→ @playwright/mcp
 
 stdin and stderr pass through unchanged. non-YAML messages pass through unchanged. on exit, prints compression stats to stderr.
 
+## related projects
+
+- **[mcpguard](https://github.com/mark-liu/mcpguard)** — MCP stdio proxy for prompt injection scanning + payload compression. Same proxy architecture, but for security rather than token savings. Use mcpguard for Discord/Telegram/any server returning user-generated content.
+- **[webguard-mcp](https://github.com/mark-liu/webguard-mcp)** — prompt injection scanning for web fetches. Different input (HTTP pages vs MCP tool results), same threat model.
+
 ## license
 
 MIT
